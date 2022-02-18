@@ -1,3 +1,9 @@
+# DL-DIY potential project ideas
+- try deit on small datasets cifar-10, cifar-100
+- use deit for semi-supervised learning like in fixmatch project
+
+----------------------
+
 # DeiT: Data-efficient Image Transformers
 
 This repository contains PyTorch evaluation code, training code and pretrained models for the following projects:
