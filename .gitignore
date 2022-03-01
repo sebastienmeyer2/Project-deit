@@ -3,3 +3,12 @@
 imnet_resnet50_scratch/timm_temp/
 .dumbo.json
 checkpoints/
+
+# Local configuration files
+.pylintrc
+.python-version
+.vscode/
+
+# Large files / folders
+data/
+results/

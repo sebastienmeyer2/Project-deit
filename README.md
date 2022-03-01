@@ -1,6 +1,8 @@
 # DL-DIY potential project ideas
 - try deit on small datasets cifar-10, cifar-100
 - use deit for semi-supervised learning like in fixmatch project
+- token pooling (voir github 2ème lien) - compresser ~ top-k tokens dans le class token à intégrer dans DeiT 
+
 
 ----------------------
 

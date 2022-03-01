@@ -6,24 +6,22 @@ from functools import partial
 from typing import Optional
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from torch import nn
+# import torch.nn.functional as F
+
 from timm.models.efficientnet_blocks import SqueezeExcite
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 from timm.models.registry import register_model
 
-__all__ = ['S60', 'S120', 'B60', 'B120', 'L60', 'L120', 'S60_multi']
+__all__ = ["S60", "S120", "B60", "B120", "L60", "L120", "S60_multi"]
 
 
 class Mlp(nn.Module):
-    def __init__(
-        self,
-        in_features: int,
-        hidden_features: Optional[int] = None,
-        out_features: Optional[int] = None,
-        act_layer: nn.Module = nn.GELU,
-        drop: float = 0.0,
-    ):
+
+    def __init__(self, in_features: int, hidden_features: Optional[int] = None,
+                 out_features: Optional[int] = None, act_layer: nn.Module = nn.GELU,
+                 drop: float = 0.):
+
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
@@ -33,28 +31,27 @@ class Mlp(nn.Module):
         self.drop = nn.Dropout(drop)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+
         x = self.fc1(x)
         x = self.act(x)
         x = self.drop(x)
         x = self.fc2(x)
         x = self.drop(x)
+
         return x
 
 
 class Learned_Aggregation_Layer(nn.Module):
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int = 1,
-        qkv_bias: bool = False,
-        qk_scale: Optional[float] = None,
-        attn_drop: float = 0.0,
-        proj_drop: float = 0.0,
-    ):
+
+    def __init__(self, dim: int, num_heads: int = 1, qkv_bias: bool = False,
+                 qk_scale: Optional[float] = None, attn_drop: float = 0., proj_drop: float = 0.):
+
         super().__init__()
+
         self.num_heads = num_heads
         head_dim: int = dim // num_heads
-        # NOTE scale factor was wrong in my original version, can set manually to be compat with prev weights
+        # NOTE scale factor was wrong in my original version, can set manually to be compat with
+        # prev weights
         self.scale = qk_scale or head_dim**-0.5
 
         self.q = nn.Linear(dim, dim, bias=qkv_bias)
@@ -67,7 +64,8 @@ class Learned_Aggregation_Layer(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, N, C = x.shape
-        q = self.q(x[:, 0]).unsqueeze(1).reshape(B, 1, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+        q = self.q(x[:, 0]).unsqueeze(1).reshape(B, 1, self.num_heads, C // self.num_heads)
+        q = q.permute(0, 2, 1, 3)
         k = self.k(x).reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
 
         q = q * self.scale
@@ -86,17 +84,13 @@ class Learned_Aggregation_Layer(nn.Module):
 
 
 class Learned_Aggregation_Layer_multi(nn.Module):
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int = 8,
-        qkv_bias: bool = False,
-        qk_scale: Optional[float] = None,
-        attn_drop: float = 0.0,
-        proj_drop: float = 0.0,
-        num_classes: int = 1000,
-    ):
+
+    def __init__(self, dim: int, num_heads: int = 8, qkv_bias: bool = False,
+                 qk_scale: Optional[float] = None, attn_drop: float = 0.0, proj_drop: float = 0.0,
+                 num_classes: int = 1000):
+
         super().__init__()
+
         self.num_heads = num_heads
         head_dim: int = dim // num_heads
         self.scale = qk_scale or head_dim**-0.5
@@ -110,6 +104,7 @@ class Learned_Aggregation_Layer_multi(nn.Module):
         self.num_classes = num_classes
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+
         B, N, C = x.shape
         q = (
             self.q(x[:, : self.num_classes])
@@ -141,32 +136,26 @@ class Learned_Aggregation_Layer_multi(nn.Module):
 
 
 class Layer_scale_init_Block_only_token(nn.Module):
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int,
-        mlp_ratio: float = 4.0,
-        qkv_bias: bool = False,
-        qk_scale: Optional[float] = None,
-        drop: float = 0.0,
-        attn_drop: float = 0.0,
-        drop_path: float = 0.0,
-        act_layer: nn.Module = nn.GELU,
-        norm_layer=nn.LayerNorm,
-        Attention_block=Learned_Aggregation_Layer,
-        Mlp_block=Mlp,
-        init_values: float = 1e-4,
-    ):
+
+    def __init__(self, dim: int, num_heads: int, mlp_ratio: float = 4.0, qkv_bias: bool = False,
+                 qk_scale: Optional[float] = None, drop: float = 0.0, attn_drop: float = 0.0,
+                 drop_path: float = 0.0, act_layer: nn.Module = nn.GELU, norm_layer=nn.LayerNorm,
+                 Attention_block=Learned_Aggregation_Layer, Mlp_block=Mlp,
+                 init_values: float = 1e-4):
+
         super().__init__()
+
         self.norm1 = norm_layer(dim)
         self.attn = Attention_block(
-            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop
+            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop,
+            proj_drop=drop
         )
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp_block(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.mlp = Mlp_block(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer,
+                             drop=drop)
         self.gamma_1 = nn.Parameter(init_values * torch.ones((dim)), requires_grad=True)
         self.gamma_2 = nn.Parameter(init_values * torch.ones((dim)), requires_grad=True)
 
@@ -178,7 +167,9 @@ class Layer_scale_init_Block_only_token(nn.Module):
 
 
 class Conv_blocks_se(nn.Module):
+
     def __init__(self, dim: int):
+
         super().__init__()
 
         self.qkv_pos = nn.Sequential(
@@ -191,6 +182,7 @@ class Conv_blocks_se(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+
         B, N, C = x.shape
         H = W = int(N ** 0.5)
         x = x.transpose(-1, -2)
@@ -198,30 +190,36 @@ class Conv_blocks_se(nn.Module):
         x = self.qkv_pos(x)
         x = x.reshape(B, C, N)
         x = x.transpose(-1, -2)
+
         return x
 
 
 class Layer_scale_init_Block(nn.Module):
+
     def __init__(
         self,
         dim: int,
         drop_path: float = 0.0,
-        act_layer: nn.Module = nn.GELU,
+        # act_layer: nn.Module = nn.GELU,
         norm_layer=nn.LayerNorm,
         Attention_block=None,
-        init_values: float = 1e-4,
+        init_values: float = 1e-4
     ):
+
         super().__init__()
+
         self.norm1 = norm_layer(dim)
         self.attn = Attention_block(dim)
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.gamma_1 = nn.Parameter(init_values * torch.ones((dim)), requires_grad=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+
         return x + self.drop_path(self.gamma_1 * self.attn(self.norm1(x)))
 
 
 def conv3x3(in_planes: int, out_planes: int, stride: int = 1) -> nn.Sequential:
+
     """3x3 convolution with padding"""
     return nn.Sequential(
         nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False),
@@ -231,8 +229,11 @@ def conv3x3(in_planes: int, out_planes: int, stride: int = 1) -> nn.Sequential:
 class ConvStem(nn.Module):
     """Image to Patch Embedding"""
 
-    def __init__(self, img_size: int = 224, patch_size: int = 16, in_chans: int = 3, embed_dim: int = 768):
+    def __init__(self, img_size: int = 224, patch_size: int = 16, in_chans: int = 3,
+                 embed_dim: int = 768):
+
         super().__init__()
+
         img_size = to_2tuple(img_size)
         patch_size = to_2tuple(patch_size)
         num_patches = (img_size[1] // patch_size[1]) * (img_size[0] // patch_size[0])
@@ -250,13 +251,20 @@ class ConvStem(nn.Module):
             conv3x3(embed_dim // 2, embed_dim, 2),
         )
 
-    def forward(self, x: torch.Tensor, padding_size: Optional[int] = None) -> torch.Tensor:
-        B, C, H, W = x.shape
+    def forward(
+        self,
+        x: torch.Tensor,
+        # padding_size: Optional[int] = None
+    ) -> torch.Tensor:
+
+        # B, C, H, W = x.shape
         x = self.proj(x).flatten(2).transpose(1, 2)
+
         return x
 
 
 class PatchConvnet(nn.Module):
+
     def __init__(
         self,
         img_size: int = 224,
@@ -271,9 +279,9 @@ class PatchConvnet(nn.Module):
         drop_rate: float = 0.0,
         attn_drop_rate: float = 0.0,
         drop_path_rate: float = 0.0,
-        hybrid_backbone: Optional = None,
+        # hybrid_backbone: Optional = None,
         norm_layer=nn.LayerNorm,
-        global_pool: Optional[str] = None,
+        # global_pool: Optional[str] = None,
         block_layers=Layer_scale_init_Block,
         block_layers_token=Layer_scale_init_Block_only_token,
         Patch_layer=ConvStem,
@@ -287,12 +295,13 @@ class PatchConvnet(nn.Module):
         mlp_ratio_clstk: float = 3.0,
         multiclass: bool = False,
     ):
+
         super().__init__()
 
         self.multiclass = multiclass
         self.patch_size = patch_size
         self.num_classes = num_classes
-        self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
+        self.num_features = self.embed_dim = embed_dim  # for consistency w. other models
 
         self.patch_embed = Patch_layer(
             img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim
@@ -347,7 +356,7 @@ class PatchConvnet(nn.Module):
 
         self.total_len = depth_token_only + depth
 
-        self.feature_info = [dict(num_chs=int(embed_dim), reduction=0, module='head')]
+        self.feature_info = [dict(num_chs=int(embed_dim), reduction=0, module="head")]
         if not self.multiclass:
             self.head = nn.Linear(int(embed_dim), num_classes) if num_classes > 0 else nn.Identity()
         else:
@@ -369,7 +378,7 @@ class PatchConvnet(nn.Module):
 
     @torch.jit.ignore
     def no_weight_decay(self):
-        return {'cls_token'}
+        return {"cls_token"}
 
     def get_classifier(self):
         return self.head
@@ -377,19 +386,24 @@ class PatchConvnet(nn.Module):
     def get_num_layers(self):
         return len(self.blocks)
 
-    def reset_classifier(self, num_classes: int, global_pool: str = ''):
+    def reset_classifier(
+        self,
+        num_classes: int,
+        # global_pool: str = ""
+    ):
         self.num_classes = num_classes
         self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
     def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+
         B = x.shape[0]
         x = self.patch_embed(x)
         cls_tokens = self.cls_token.expand(B, -1, -1)
 
-        for i, blk in enumerate(self.blocks):
+        for blk in self.blocks:
             x = blk(x)
 
-        for i, blk in enumerate(self.blocks_token_only):
+        for blk in self.blocks_token_only:
             cls_tokens = blk(x, cls_tokens)
         x = torch.cat((cls_tokens, x), dim=1)
 
@@ -414,7 +428,11 @@ class PatchConvnet(nn.Module):
 
 
 @register_model
-def S60(pretrained: bool = False, **kwargs):
+def S60(
+    # pretrained: bool = False,
+    **kwargs
+):
+
     model = PatchConvnet(
         patch_size=16,
         embed_dim=384,
@@ -433,7 +451,11 @@ def S60(pretrained: bool = False, **kwargs):
 
 
 @register_model
-def S120(pretrained: bool = False, **kwargs):
+def S120(
+    # pretrained: bool = False,
+    **kwargs
+):
+
     model = PatchConvnet(
         patch_size=16,
         embed_dim=384,
@@ -452,7 +474,11 @@ def S120(pretrained: bool = False, **kwargs):
 
 
 @register_model
-def B60(pretrained: bool = False, **kwargs):
+def B60(
+    # pretrained: bool = False,
+    **kwargs
+):
+
     model = PatchConvnet(
         patch_size=16,
         embed_dim=768,
@@ -469,7 +495,11 @@ def B60(pretrained: bool = False, **kwargs):
 
 
 @register_model
-def B120(pretrained: bool = False, **kwargs):
+def B120(
+    # pretrained: bool = False,
+    **kwargs
+):
+
     model = PatchConvnet(
         patch_size=16,
         embed_dim=768,
@@ -487,7 +517,11 @@ def B120(pretrained: bool = False, **kwargs):
 
 
 @register_model
-def L60(pretrained: bool = False, **kwargs):
+def L60(
+    # pretrained: bool = False,
+    **kwargs
+):
+
     model = PatchConvnet(
         patch_size=16,
         embed_dim=1024,
@@ -506,7 +540,11 @@ def L60(pretrained: bool = False, **kwargs):
 
 
 @register_model
-def L120(pretrained: bool = False, **kwargs):
+def L120(
+    # pretrained: bool = False,
+    **kwargs
+):
+
     model = PatchConvnet(
         patch_size=16,
         embed_dim=1024,
@@ -525,7 +563,11 @@ def L120(pretrained: bool = False, **kwargs):
 
 
 @register_model
-def S60_multi(pretrained: bool = False, **kwargs):
+def S60_multi(
+    # pretrained: bool = False,
+    **kwargs
+):
+
     model = PatchConvnet(
         patch_size=16,
         embed_dim=384,

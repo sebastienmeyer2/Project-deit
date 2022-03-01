@@ -3,10 +3,13 @@
 """
 A script to run multinode training with submitit.
 """
-import argparse
+
 import os
-import uuid
+
 from pathlib import Path
+
+import argparse
+import uuid
 
 import main as classification
 import submitit
@@ -15,12 +18,21 @@ import submitit
 def parse_args():
     classification_parser = classification.get_args_parser()
     parser = argparse.ArgumentParser("Submitit for DeiT", parents=[classification_parser])
-    parser.add_argument("--ngpus", default=8, type=int, help="Number of gpus to request on each node")
+    parser.add_argument("--ngpus",
+                        default=8,
+                        type=int,
+                        help="Number of gpus to request on each node")
     parser.add_argument("--nodes", default=2, type=int, help="Number of nodes to request")
     parser.add_argument("--timeout", default=2800, type=int, help="Duration of the job")
-    parser.add_argument("--job_dir", default="", type=str, help="Job dir. Leave empty for automatic.")
+    parser.add_argument("--job_dir",
+                        default="",
+                        type=str,
+                        help="Job dir. Leave empty for automatic.")
 
-    parser.add_argument("--partition", default="learnfair", type=str, help="Partition where to submit")
+    parser.add_argument("--partition",
+                        default="learnfair",
+                        type=str,
+                        help="Partition where to submit")
     parser.add_argument("--use_volta32", action='store_true', help="Big models? Use this")
     parser.add_argument('--comment', default="", type=str,
                         help='Comment to pass to scheduler, e.g. priority message')
@@ -45,19 +57,18 @@ def get_init_file():
     return init_file
 
 
-class Trainer(object):
+class Trainer():
+
     def __init__(self, args):
+
         self.args = args
 
     def __call__(self):
-        import main as classification
 
         self._setup_gpu_args()
         classification.main(self.args)
 
     def checkpoint(self):
-        import os
-        import submitit
 
         self.args.dist_url = get_init_file().as_uri()
         checkpoint_file = os.path.join(self.args.output_dir, "checkpoint.pth")
@@ -65,11 +76,10 @@ class Trainer(object):
             self.args.resume = checkpoint_file
         print("Requeuing ", self.args)
         empty_trainer = type(self)(self.args)
+
         return submitit.helpers.DelayedSubmission(empty_trainer)
 
     def _setup_gpu_args(self):
-        import submitit
-        from pathlib import Path
 
         job_env = submitit.JobEnvironment()
         self.args.output_dir = Path(str(self.args.output_dir).replace("%j", str(job_env.job_id)))

@@ -1,8 +1,11 @@
 # Copyright (c) 2015-present, Facebook, Inc.
 # All rights reserved.
+
+
+import math
+
 import torch
 import torch.distributed as dist
-import math
 
 
 class RASampler(torch.utils.data.Sampler):
@@ -14,6 +17,7 @@ class RASampler(torch.utils.data.Sampler):
     """
 
     def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True, num_repeats: int = 3):
+
         if num_replicas is None:
             if not dist.is_available():
                 raise RuntimeError("Requires distributed package to be available")
@@ -32,7 +36,8 @@ class RASampler(torch.utils.data.Sampler):
         self.num_samples = int(math.ceil(len(self.dataset) * self.num_repeats / self.num_replicas))
         self.total_size = self.num_samples * self.num_replicas
         # self.num_selected_samples = int(math.ceil(len(self.dataset) / self.num_replicas))
-        self.num_selected_samples = int(math.floor(len(self.dataset) // 256 * 256 / self.num_replicas))
+        self.num_selected_samples = \
+            int(math.floor(len(self.dataset) // 256 * 256 / self.num_replicas))
         self.shuffle = shuffle
 
     def __iter__(self):
