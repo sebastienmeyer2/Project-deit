@@ -692,13 +692,18 @@ def main(args):
 
     output_dir = Path(args.output_dir)
     if args.resume:
+
         if args.resume.startswith("https"):
             checkpoint = torch.hub.load_state_dict_from_url(
                 args.resume, map_location="cpu", check_hash=True)
         else:
             checkpoint = torch.load(args.resume, map_location="cpu")
         model_without_ddp.load_state_dict(checkpoint["model"])
-        if not args.eval and "optimizer" in checkpoint and "lr_scheduler" in checkpoint and "epoch" in checkpoint:
+
+        cd_eval = not args.eval
+        cd_opt = "optimizer" in checkpoint and "lr_scheduler" in checkpoint
+        cd_ep = "epoch" in checkpoint
+        if cd_eval and cd_opt and cd_ep:
             optimizer.load_state_dict(checkpoint["optimizer"])
             lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
             args.start_epoch = checkpoint["epoch"] + 1
@@ -706,6 +711,7 @@ def main(args):
                 utils._load_checkpoint_for_ema(model_ema, checkpoint["model_ema"])
             if "scaler" in checkpoint:
                 loss_scaler.load_state_dict(checkpoint["scaler"])
+
         lr_scheduler.step(args.start_epoch)
 
     if args.eval:
