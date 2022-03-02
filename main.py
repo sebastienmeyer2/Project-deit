@@ -1,6 +1,6 @@
 # Copyright (c) 2015-present, Facebook, Inc.
 # All rights reserved.
-"""WIP."""
+"""Main file for training models using distillation."""
 
 
 import datetime
@@ -25,7 +25,6 @@ from timm.utils import NativeScaler, get_state_dict, ModelEma
 
 
 import utils
-# import models
 from datasets import build_dataset
 from engine import train_one_epoch, evaluate
 from losses import DistillationLoss
@@ -33,7 +32,7 @@ from samplers import RASampler
 
 
 def get_args_parser():
-
+    """Parser getter."""
     parser = argparse.ArgumentParser("DeiT training and evaluation script", add_help=False)
     parser.add_argument(
         "--batch-size",
@@ -492,8 +491,14 @@ def get_args_parser():
     return parser
 
 
-def main(args):
+def main(args: argparse.Namespace):
+    """Main function to run.
 
+    Parameters
+    ----------
+    args : `argparse.Namespace`
+        Namespace of arguments as parsed by `argparse`.
+    """
     utils.init_distributed_mode(args)
 
     print(args)
@@ -514,44 +519,44 @@ def main(args):
     dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
     dataset_val, _ = build_dataset(is_train=False, args=args)
 
-    if True:  # args.distributed:
+    # if True:  # args.distributed:
 
-        num_tasks = utils.get_world_size()
-        global_rank = utils.get_rank()
+    num_tasks = utils.get_world_size()
+    global_rank = utils.get_rank()
 
-        if args.repeated_aug:
+    if args.repeated_aug:
 
-            sampler_train = RASampler(
-                dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
-            )
-
-        else:
-
-            sampler_train = torch.utils.data.DistributedSampler(
-                dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
-            )
-
-        if args.dist_eval:
-
-            if len(dataset_val) % num_tasks != 0:
-
-                warn_msg = "Warning: Enabling distributed evaluation with an eval dataset not"
-                warn_msg += " divisible by process number. This will slightly alter validation"
-                warn_msg += " results as extra duplicate entries are added to achieve equal num"
-                warn_msg += " of samples per-process."
-                print(warn_msg)
-
-            sampler_val = torch.utils.data.DistributedSampler(
-                dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
-
-        else:
-
-            sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+        sampler_train = RASampler(
+            dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
+        )
 
     else:
 
-        sampler_train = torch.utils.data.RandomSampler(dataset_train)
+        sampler_train = torch.utils.data.DistributedSampler(
+            dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
+        )
+
+    if args.dist_eval:
+
+        if len(dataset_val) % num_tasks != 0:
+
+            warn_msg = "Warning: Enabling distributed evaluation with an eval dataset not"
+            warn_msg += " divisible by process number. This will slightly alter validation"
+            warn_msg += " results as extra duplicate entries are added to achieve equal num"
+            warn_msg += " of samples per-process."
+            print(warn_msg)
+
+        sampler_val = torch.utils.data.DistributedSampler(
+            dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+
+    else:
+
         sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+
+    # else:
+
+    #     sampler_train = torch.utils.data.RandomSampler(dataset_train)
+    #     sampler_val = torch.utils.data.SequentialSampler(dataset_val)
 
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,

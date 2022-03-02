@@ -1,7 +1,6 @@
 # Copyright (c) 2015-present, Facebook, Inc.
 # All rights reserved.
-"""
-Misc functions, including distributed helpers.
+"""Misc functions, including distributed helpers.
 
 Mostly copy-paste from torchvision references.
 """
@@ -21,7 +20,7 @@ import torch
 import torch.distributed as dist
 
 
-class SmoothedValue(object):
+class SmoothedValue():
     """Track a series of values and provide access to smoothed values over a
     window or the global series average.
     """

@@ -1,6 +1,6 @@
 # Copyright (c) 2015-present, Facebook, Inc.
 # All rights reserved.
-"""Train and eval functions used in main.py"""
+"""Train and eval functions used in main.py."""
 
 
 import sys
@@ -19,11 +19,12 @@ import utils
 from losses import DistillationLoss
 
 
-def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
-                    data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, loss_scaler, max_norm: float = 0,
-                    model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None,
-                    set_training_mode=True):
+def train_one_epoch(
+    model: torch.nn.Module, criterion: DistillationLoss, data_loader: Iterable,
+    optimizer: torch.optim.Optimizer, device: torch.device, epoch: int, loss_scaler,
+    max_norm: float = 0, model_ema: Optional[ModelEma] = None,
+    mixup_fn: Optional[Mixup] = None, set_training_mode=True
+):
 
     model.train(set_training_mode)
     metric_logger = utils.MetricLogger(delimiter="  ")

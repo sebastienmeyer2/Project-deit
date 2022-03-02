@@ -1,6 +1,15 @@
 # Copyright (c) 2015-present, Facebook, Inc.
 # All rights reserved.
+"""Gather CaiT models.
 
+References
+----------
+.. [1] Hugo Touvron, Matthieu Cord, Alexandre Sablayrolles, Gabriel Synnaeve and Hervé Jégou.
+    *Going deeper with Image Transformers.* (Available at: https://arxiv.org/abs/2103.17239)
+"""
+
+
+from typing import Optional
 
 from functools import partial
 
@@ -21,12 +30,23 @@ __all__ = [
 
 
 class Class_Attention(nn.Module):
-    # taken from https://github.com/rwightman/pytorch-image-models/blob/master/timm/models/
-    # vision_transformer.py
-    # with slight modifications to do CA
-    def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.):
+    """Attention module for the CaiT models.
+
+    Taken from (with slight modifications to do class attention):
+    https://github.com/rwightman/pytorch-image-models/blob/master/timm/models/vision_transformer.py
+    """
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 8,
+        qkv_bias: bool = False,
+        qk_scale: Optional[float] = None,
+        attn_drop: float = 0.,
+        proj_drop: float = 0.
+    ):
 
         super().__init__()
+
         self.num_heads = num_heads
         head_dim = dim // num_heads
         self.scale = qk_scale or head_dim ** -0.5
@@ -38,7 +58,8 @@ class Class_Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass on inputs."""
 
         B, N, C = x.shape
         q = self.q(x[:, 0]).unsqueeze(1).reshape(B, 1, self.num_heads, C // self.num_heads)

@@ -1,13 +1,19 @@
 # Copyright (c) 2015-present, Facebook, Inc.
 # All rights reserved.
+"""Gather PatchConvnet models.
 
+References
+----------
+.. [1] Hugo Touvron, Matthieu Cord, Alaaeldin El-Nouby, Piotr Bojanowski, Armand Joulin,
+    Gabriel Synnaeve and Hervé Jégou. *Augmenting Convolutionl networks with attention-based
+    aggregation.* (Available at: https://arxiv.org/abs/2112.13692)
+"""
 
 from functools import partial
 from typing import Optional
 
 import torch
 from torch import nn
-# import torch.nn.functional as F
 
 from timm.models.efficientnet_blocks import SqueezeExcite
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_

@@ -41,7 +41,6 @@ from samplers import RASampler
 
 def get_args_parser():
     """Parser getter."""
-
     parser = argparse.ArgumentParser("Script for training transfered models.", add_help=False)
 
     parser.add_argument(
@@ -447,7 +446,6 @@ def main(args: argparse.Namespace):
     args : `argparse.Namespace`
         Namespace of arguments as parsed by `argparse`.
     """
-
     print(args)
 
     device = torch.device(args.device)

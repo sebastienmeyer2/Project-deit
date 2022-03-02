@@ -1,8 +1,6 @@
 # Copyright (c) 2015-present, Facebook, Inc.
 # All rights reserved.
-"""
-Implements the knowledge distillation loss
-"""
+"""Implement the knowledge distillation loss."""
 
 
 import torch

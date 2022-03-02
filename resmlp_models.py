@@ -2,7 +2,15 @@
 # All rights reserved.
 
 # from functools import partial
+"""Gather ResMLP models.
 
+References
+----------
+.. [1] Hugo Touvron, Piotr Bojanowski, Mathilde Caron, Matthieu Cord, Alaaeldin El-Nouby,
+    Edouard Grave, Gautier Izacard, Armand Joulin, Gabriel Synnaeve, Jakob Verbeek and Hervé
+    Jégou. *ResMLP: Feedforward networks for image classification with data-efficient training.*
+    (Available at: https://arxiv.org/abs/2112.13692)
+"""
 
 import torch
 from torch import nn
