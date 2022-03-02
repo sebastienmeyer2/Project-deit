@@ -575,7 +575,8 @@ def main(args):
         mixup_fn = Mixup(
             mixup_alpha=args.mixup, cutmix_alpha=args.cutmix, cutmix_minmax=args.cutmix_minmax,
             prob=args.mixup_prob, switch_prob=args.mixup_switch_prob, mode=args.mixup_mode,
-            label_smoothing=args.smoothing, num_classes=args.nb_classes)
+            label_smoothing=args.smoothing, num_classes=args.nb_classes
+        )
 
     print(f"Creating model: {args.model}")
     model = create_model(
@@ -662,7 +663,9 @@ def main(args):
 
     teacher_model = None
     if args.distillation_type != "none":
+
         assert args.teacher_path, "need to specify teacher-path when using distillation"
+
         print(f"Creating teacher model: {args.teacher_model}")
         teacher_model = create_model(
             args.teacher_model,
@@ -675,6 +678,7 @@ def main(args):
                 args.teacher_path, map_location="cpu", check_hash=True)
         else:
             checkpoint = torch.load(args.teacher_path, map_location="cpu")
+
         teacher_model.load_state_dict(checkpoint["model"])
         teacher_model.to(device)
         teacher_model.eval()
@@ -717,6 +721,7 @@ def main(args):
     start_time = time.time()
     max_accuracy = 0.0
     for epoch in range(args.start_epoch, args.epochs):
+
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
 
@@ -731,12 +736,15 @@ def main(args):
         if args.output_dir:
             checkpoint_paths = [output_dir / "checkpoint.pth"]
             for checkpoint_path in checkpoint_paths:
+
+                ema_state = None if model_ema is None else get_state_dict(model_ema)
+
                 utils.save_on_master({
                     "model": model_without_ddp.state_dict(),
                     "optimizer": optimizer.state_dict(),
                     "lr_scheduler": lr_scheduler.state_dict(),
                     "epoch": epoch,
-                    "model_ema": get_state_dict(model_ema),
+                    "model_ema": ema_state,
                     "scaler": loss_scaler.state_dict(),
                     "args": args,
                 }, checkpoint_path)
@@ -751,12 +759,15 @@ def main(args):
             if args.output_dir:
                 checkpoint_paths = [output_dir / "best_checkpoint.pth"]
                 for checkpoint_path in checkpoint_paths:
+
+                    ema_state = None if model_ema is None else get_state_dict(model_ema)
+
                     utils.save_on_master({
                         "model": model_without_ddp.state_dict(),
                         "optimizer": optimizer.state_dict(),
                         "lr_scheduler": lr_scheduler.state_dict(),
                         "epoch": epoch,
-                        "model_ema": get_state_dict(model_ema),
+                        "model_ema": ema_state,
                         "scaler": loss_scaler.state_dict(),
                         "args": args,
                     }, checkpoint_path)

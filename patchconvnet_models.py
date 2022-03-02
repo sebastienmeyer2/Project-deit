@@ -13,6 +13,7 @@ from timm.models.efficientnet_blocks import SqueezeExcite
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 from timm.models.registry import register_model
 
+
 __all__ = ["S60", "S120", "B60", "B120", "L60", "L120", "S60_multi"]
 
 

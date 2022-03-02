@@ -4,6 +4,7 @@
 A script to run multinode training with submitit.
 """
 
+
 import os
 
 from pathlib import Path
@@ -11,8 +12,10 @@ from pathlib import Path
 import argparse
 import uuid
 
-import main as classification
 import submitit
+
+
+import main as classification
 
 
 def parse_args():
