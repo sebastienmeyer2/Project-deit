@@ -1,6 +1,9 @@
 # Copyright (c) 2015-present, Facebook, Inc.
 # All rights reserved.
-"""Train and eval functions used in main.py."""
+"""Train and eval functions used in main.py.
+
+Additional changes might be taken from https://github.com/youweiliang/evit.
+"""
 
 
 import sys
@@ -16,6 +19,7 @@ from timm.utils import accuracy, ModelEma
 
 
 import utils
+from helpers import adjust_keep_rate
 from losses import DistillationLoss
 
 
@@ -41,6 +45,7 @@ def train_one_epoch(
             samples, targets = mixup_fn(samples, targets)
 
         with torch.cuda.amp.autocast():
+            # outputs = model(samples)
             outputs = model(samples)
             loss = criterion(samples, outputs, targets)
 
@@ -54,8 +59,10 @@ def train_one_epoch(
 
         # This attribute is added by timm on one optimizer (adahessian)
         is_second_order = hasattr(optimizer, "is_second_order") and optimizer.is_second_order
-        loss_scaler(loss, optimizer, clip_grad=max_norm,
-                    parameters=model.parameters(), create_graph=is_second_order)
+        loss_scaler(
+            loss, optimizer, clip_grad=max_norm, parameters=model.parameters(),
+            create_graph=is_second_order
+        )
 
         torch.cuda.synchronize()
         if model_ema is not None:
@@ -70,23 +77,96 @@ def train_one_epoch(
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
+def train_one_epoch_shrink(
+    model: torch.nn.Module, criterion: DistillationLoss, data_loader: Iterable,
+    optimizer: torch.optim.Optimizer, device: torch.device, epoch: int, loss_scaler,
+    max_norm: float = 0, model_ema: Optional[ModelEma] = None,
+    mixup_fn: Optional[Mixup] = None, writer=None, set_training_mode=True, args=None
+):
+
+    model.train(set_training_mode)
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger.add_meter("lr", utils.SmoothedValue(window_size=1, fmt="{value:.6f}"))
+    header = f"Epoch: [{epoch}]"
+
+    print_freq = 10
+    log_interval = 25
+    it = epoch * len(data_loader)
+    ITERS_PER_EPOCH = len(data_loader)
+
+    base_rate = args.base_keep_rate
+
+    for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
+
+        samples = samples.to(device, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
+
+        keep_rate = adjust_keep_rate(
+            it, epoch, warmup_epochs=args.shrink_start_epoch,
+            total_epochs=args.shrink_start_epoch + args.shrink_epochs,
+            ITERS_PER_EPOCH=ITERS_PER_EPOCH, base_keep_rate=base_rate
+        )
+
+        if mixup_fn is not None:
+            samples, targets = mixup_fn(samples, targets)
+
+        with torch.cuda.amp.autocast():
+            # outputs = model(samples)
+            outputs = model(samples, keep_rate)
+            loss = criterion(samples, outputs, targets)
+
+        loss_value = loss.item()
+
+        if not math.isfinite(loss_value):
+            print(f"Loss is {loss_value}, stopping training")
+            sys.exit(1)
+
+        optimizer.zero_grad()
+
+        # This attribute is added by timm on one optimizer (adahessian)
+        is_second_order = hasattr(optimizer, "is_second_order") and optimizer.is_second_order
+        loss_scaler(
+            loss, optimizer, clip_grad=max_norm, parameters=model.parameters(),
+            create_graph=is_second_order
+        )
+
+        torch.cuda.synchronize()
+        if model_ema is not None:
+            model_ema.update(model)
+
+        metric_logger.update(loss=loss_value)
+        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+
+        if utils.get_rank() == 0 and it % log_interval == 0:
+            writer.add_scalar("loss", loss_value, it)
+            writer.add_scalar("lr", optimizer.param_groups[0]["lr"], it)
+            writer.add_scalar("keep_rate", keep_rate, it)
+        it += 1
+
+    # Gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+    print("Averaged stats:", metric_logger)
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, keep_rate
+
+
 @torch.no_grad()
-def evaluate(data_loader, model, device):
+def evaluate(data_loader, model, device, keep_rate=None):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = "Test:"
 
-    # switch to evaluation mode
+    # Switch to evaluation mode
     model.eval()
 
     for images, target in metric_logger.log_every(data_loader, 10, header):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
-        # compute output
+        # Compute output
         with torch.cuda.amp.autocast():
-            output = model(images)
+            # output = model(images)
+            output = model(images, keep_rate)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -96,9 +176,44 @@ def evaluate(data_loader, model, device):
         metric_logger.meters["acc1"].update(acc1.item(), n=batch_size)
         metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
 
-    # gather the stats from all processes
+    # Gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}"
           .format(top1=metric_logger.acc1, top5=metric_logger.acc5, losses=metric_logger.loss))
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+
+@torch.no_grad()
+def get_acc(data_loader, model, device, keep_rate=None, tokens=None):
+    """Taken from https://github.com/youweiliang/evit."""
+    criterion = torch.nn.CrossEntropyLoss()
+
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    header = "Test:"
+
+    # Switch to evaluation mode
+    model.eval()
+
+    for images, target in metric_logger.log_every(data_loader, 10, header):
+        images = images.to(device, non_blocking=True)
+        target = target.to(device, non_blocking=True)
+
+        # Compute output
+        with torch.cuda.amp.autocast():
+            output = model(images, keep_rate, tokens)
+            loss = criterion(output, target)
+
+        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+
+        batch_size = images.shape[0]
+        metric_logger.update(loss=loss.item())
+        metric_logger.meters["acc1"].update(acc1.item(), n=batch_size)
+        metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
+
+    # Gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+    print("* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}"
+          .format(top1=metric_logger.acc1, top5=metric_logger.acc5, losses=metric_logger.loss))
+
+    return metric_logger.acc1.global_avg

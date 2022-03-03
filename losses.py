@@ -35,12 +35,10 @@ class DistillationLoss(torch.nn.Module):
         """
         outputs_kd = None
         if not isinstance(outputs, torch.Tensor):
-
             # Assume that the model outputs a tuple of [outputs, outputs_kd]
             outputs, outputs_kd = outputs
 
         # Base loss (first term of equations 2 & 3 in the paper)
-
         base_loss = self.base_criterion(outputs, labels)
 
         # No distillation case (no teacher)

@@ -16,6 +16,8 @@ import time
 
 from collections import defaultdict, deque
 
+import math
+
 import torch
 import torch.distributed as dist
 
@@ -264,3 +266,35 @@ def init_distributed_mode(args):
                                          world_size=args.world_size, rank=args.rank)
     torch.distributed.barrier()
     setup_for_distributed(args.rank == 0)
+
+
+class CosineCycle:
+    """Taken from https://github.com/youweiliang/evit."""
+    def __init__(self, n_splits, min_v, max_v):
+
+        self.n_splits = n_splits
+        self.n = 0
+        self.values = [
+            min_v + (max_v - min_v) * (math.cos(i / n_splits * 2 * math.pi) + 1) * 0.5
+            for i in range(n_splits)
+        ]
+
+    def next(self, update=True, relax=False):
+
+        if relax:
+            n = max(0, self.n - 1)
+            m = n % self.n_splits
+            tmp = self.values[m]
+
+        n = self.n + 1
+        m = n % self.n_splits
+
+        if relax and tmp > self.values[m]:
+            if update:
+                self.n -= 1
+            return tmp
+
+        if update:
+            self.n += 1
+
+        return self.values[m]

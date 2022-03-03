@@ -3,6 +3,8 @@
 """Main file for training models using distillation."""
 
 
+import os
+
 import datetime
 import time
 
@@ -10,6 +12,8 @@ import json
 from pathlib import Path
 
 import argparse
+
+import warnings
 
 import numpy as np
 
@@ -23,12 +27,20 @@ from timm.scheduler import create_scheduler
 from timm.optim import create_optimizer
 from timm.utils import NativeScaler, get_state_dict, ModelEma
 
+from tensorboardX import SummaryWriter
 
+
+import models
 import utils
 from datasets import build_dataset
-from engine import train_one_epoch, evaluate
+from engine import train_one_epoch_shrink, evaluate
+from helpers import speed_test, get_macs
 from losses import DistillationLoss
 from samplers import RASampler
+
+
+warn_msg = "Argument interpolation should be of type InterpolationMode instead of int"
+warnings.filterwarnings("ignore", warn_msg)
 
 
 def get_args_parser():
@@ -45,6 +57,54 @@ def get_args_parser():
         default=300,
         type=int,
         help="Number of training epochs. Default: 300."
+    )
+
+    # Arguments related to the shrinking of inattentive tokens
+    # Taken from https://github.com/youweiliang/evit
+    parser.add_argument(
+        "--test_speed",
+        action="store_true",
+        help="Also measure throughput of model."
+    )
+    parser.add_argument(
+        "--only_test_speed",
+        action="store_true",
+        help="Only measure throughput of model."
+    )
+    parser.add_argument(
+        "--fuse_token",
+        action="store_true",
+        help="Fuse the inattentive tokens."
+    )
+    parser.add_argument(
+        "--base_keep_rate",
+        type=float,
+        default=0.7,
+        help="Base keep rate. Default: 0.7."
+    )
+    parser.add_argument(
+        "--shrink_epochs",
+        default=0,
+        type=int,
+        help="""
+             Number of epochs epochs to perform gradual shrinking of inattentive tokens.
+             Default: 0.
+             """
+    )
+    parser.add_argument(
+        "--shrink_start_epoch",
+        default=10,
+        type=int,
+        help="On which epoch to start shrinking of inattentive tokens. Default: 10."
+    )
+    parser.add_argument(
+        "--drop_loc",
+        default="(3, 6, 9)",
+        type=str,
+        help="""
+             Indices of layers for shrinking inattentive tokens written as a tuple.
+             Default: "(3, 6, 9)".
+             """
     )
 
     # Model parameters
@@ -508,7 +568,7 @@ def main(args: argparse.Namespace):
 
     device = torch.device(args.device)
 
-    # fix the seed for reproducibility
+    # Fix the seed for reproducibility
     seed = args.seed + utils.get_rank()
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -559,19 +619,13 @@ def main(args: argparse.Namespace):
     #     sampler_val = torch.utils.data.SequentialSampler(dataset_val)
 
     data_loader_train = torch.utils.data.DataLoader(
-        dataset_train, sampler=sampler_train,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        pin_memory=args.pin_mem,
-        drop_last=True,
+        dataset_train, sampler=sampler_train, batch_size=args.batch_size,
+        num_workers=args.num_workers, pin_memory=args.pin_mem, drop_last=True,
     )
 
     data_loader_val = torch.utils.data.DataLoader(
-        dataset_val, sampler=sampler_val,
-        batch_size=int(1.5 * args.batch_size),
-        num_workers=args.num_workers,
-        pin_memory=args.pin_mem,
-        drop_last=False
+        dataset_val, sampler=sampler_val, batch_size=int(1.5 * args.batch_size),
+        num_workers=args.num_workers, pin_memory=args.pin_mem, drop_last=False
     )
 
     mixup_fn = None
@@ -586,11 +640,15 @@ def main(args: argparse.Namespace):
     print(f"Creating model: {args.model}")
     model = create_model(
         args.model,
+        base_keep_rate=args.base_keep_rate,
+        drop_loc=eval(args.drop_loc),
         pretrained=False,
         num_classes=args.nb_classes,
         drop_rate=args.drop,
         drop_path_rate=args.drop_path,
         drop_block_rate=None,
+        fuse_token=args.fuse_token,
+        img_size=(args.input_size, args.input_size)
     )
 
     if args.finetune:
@@ -632,6 +690,33 @@ def main(args: argparse.Namespace):
 
     model.to(device)
 
+    output_dir = Path(args.output_dir)
+
+    # Taken from https://github.com/youweiliang/evit
+    if args.test_speed and utils.is_main_process():
+        # test model throughput for three times to ensure accuracy
+        inference_speed = speed_test(model)
+        print("inference_speed (inaccurate):", inference_speed, "images/s")
+        inference_speed = speed_test(model)
+        print("inference_speed:", inference_speed, "images/s")
+        inference_speed = speed_test(model)
+        print("inference_speed:", inference_speed, "images/s")
+        MACs = get_macs(model)
+        print("GMACs:", MACs * 1e-9)
+
+        def log_func1(*arg, **kwargs):
+            log1 = " ".join([f"{xx}" for xx in arg])
+            log2 = " ".join([f"{key}: {v}" for key, v in kwargs.items()])
+            log = log1 + "\n" + log2
+            log = log.strip("\n") + "\n"
+            if args.output_dir and utils.is_main_process():
+                with (output_dir / "speed_macs.txt").open("a") as f:
+                    f.write(log)
+        log_func1(inference_speed=inference_speed, GMACs=MACs * 1e-9)
+        log_func1(args=args)
+    if args.only_test_speed:
+        return
+
     model_ema = None
     if args.model_ema:
         # Important to create EMA model after cuda(), DP wrapper, and AMP but before SyncBN and DDP
@@ -649,6 +734,10 @@ def main(args: argparse.Namespace):
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print("number of params:", n_parameters)
 
+    # Taken from https://github.com/youweiliang/evit
+    if args.test_speed and utils.is_main_process():
+        log_func1(n_parameters=n_parameters * 1e-6)
+
     linear_scaled_lr = args.lr * args.batch_size * utils.get_world_size() / 512.0
     args.lr = linear_scaled_lr
     optimizer = create_optimizer(args, model_without_ddp)
@@ -659,7 +748,7 @@ def main(args: argparse.Namespace):
     criterion = LabelSmoothingCrossEntropy()
 
     if mixup_active:
-        # smoothing is handled with mixup label transform
+        # Smoothing is handled with mixup label transform
         criterion = SoftTargetCrossEntropy()
     elif args.smoothing:
         criterion = LabelSmoothingCrossEntropy(smoothing=args.smoothing)
@@ -688,12 +777,19 @@ def main(args: argparse.Namespace):
         teacher_model.to(device)
         teacher_model.eval()
 
-    # wrap the criterion in our custom DistillationLoss, which
-    # just dispatches to the original criterion if args.distillation_type is "none"
+    # Wrap the criterion in our custom DistillationLoss, which just dispatches to the original
+    # criterion if args.distillation_type is "none"
     criterion = DistillationLoss(
         criterion, teacher_model, args.distillation_type, args.distillation_alpha, args.
         distillation_tau
     )
+
+    # Taken from https://github.com/youweiliang/evit
+    if utils.is_main_process():
+        print("output_dir:", args.output_dir)
+        writer = SummaryWriter(os.path.join(args.output_dir, "runs"))
+    else:
+        writer = None
 
     output_dir = Path(args.output_dir)
     if args.resume:
@@ -705,10 +801,10 @@ def main(args: argparse.Namespace):
             checkpoint = torch.load(args.resume, map_location="cpu")
         model_without_ddp.load_state_dict(checkpoint["model"])
 
-        cd_eval = not args.eval
-        cd_opt = "optimizer" in checkpoint and "lr_scheduler" in checkpoint
-        cd_ep = "epoch" in checkpoint
-        if cd_eval and cd_opt and cd_ep:
+        if (
+            not args.eval and "optimizer" in checkpoint and "lr_scheduler" in checkpoint and
+            "epoch" in checkpoint
+        ):
             optimizer.load_state_dict(checkpoint["optimizer"])
             lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
             args.start_epoch = checkpoint["epoch"] + 1
@@ -736,11 +832,11 @@ def main(args: argparse.Namespace):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
 
-        train_stats = train_one_epoch(
-            model, criterion, data_loader_train,
-            optimizer, device, epoch, loss_scaler,
-            args.clip_grad, model_ema, mixup_fn,
-            set_training_mode=args.finetune == ""  # keep in eval mode during finetuning
+        train_stats, keep_rate = train_one_epoch_shrink(
+            model, criterion, data_loader_train, optimizer, device, epoch, loss_scaler,
+            args.clip_grad, model_ema, mixup_fn, writer,
+            set_training_mode=args.finetune == "",  # keep in eval mode during finetuning
+            args=args
         )
 
         lr_scheduler.step(epoch)
@@ -760,39 +856,63 @@ def main(args: argparse.Namespace):
                     "args": args,
                 }, checkpoint_path)
 
-        test_stats = evaluate(data_loader_val, model, device)
-        msg = f"Accuracy of the network on the {len(dataset_val)}"
-        msg += f""" test images: {test_stats["acc1"]:.1f}%"""
-        print(msg)
+        # test_stats = evaluate(data_loader_val, model, device)
+        # msg = f"Accuracy of the network on the {len(dataset_val)}"
+        # msg += f""" test images: {test_stats["acc1"]:.1f}%"""
+        # print(msg)
 
-        if max_accuracy < test_stats["acc1"]:
-            max_accuracy = test_stats["acc1"]
-            if args.output_dir:
-                checkpoint_paths = [output_dir / "best_checkpoint.pth"]
-                for checkpoint_path in checkpoint_paths:
+        # if max_accuracy < test_stats["acc1"]:
+        #     max_accuracy = test_stats["acc1"]
+        #     if args.output_dir:
+        #         checkpoint_paths = [output_dir / "best_checkpoint.pth"]
+        #         for checkpoint_path in checkpoint_paths:
 
-                    ema_state = None if model_ema is None else get_state_dict(model_ema)
+        #             ema_state = None if model_ema is None else get_state_dict(model_ema)
 
-                    utils.save_on_master({
-                        "model": model_without_ddp.state_dict(),
-                        "optimizer": optimizer.state_dict(),
-                        "lr_scheduler": lr_scheduler.state_dict(),
-                        "epoch": epoch,
-                        "model_ema": ema_state,
-                        "scaler": loss_scaler.state_dict(),
-                        "args": args,
-                    }, checkpoint_path)
+        #             utils.save_on_master({
+        #                 "model": model_without_ddp.state_dict(),
+        #                 "optimizer": optimizer.state_dict(),
+        #                 "lr_scheduler": lr_scheduler.state_dict(),
+        #                 "epoch": epoch,
+        #                 "model_ema": ema_state,
+        #                 "scaler": loss_scaler.state_dict(),
+        #                 "args": args,
+        #             }, checkpoint_path)
 
-        print(f"Max accuracy: {max_accuracy:.2f}%")
+        # print(f"Max accuracy: {max_accuracy:.2f}%")
+
+        # log_stats = {**{f"train_{k}": v for k, v in train_stats.items()},
+        #              **{f"test_{k}": v for k, v in test_stats.items()},
+        #              "epoch": epoch,
+        #              "n_parameters": n_parameters}
+
+        # if args.output_dir and utils.is_main_process():
+        #     with (output_dir / "log.txt").open("a") as f:
+        #         f.write(json.dumps(log_stats) + "\n")
+
+        test_interval = 30
+        if epoch % test_interval == 0 or epoch == args.epochs - 1:
+            test_stats = evaluate(data_loader_val, model, device, keep_rate)
+            test_msg = f"Accuracy of the network on the {len(dataset_val)}"
+            test_msg += f""" test images: {test_stats["acc1"]:.1f}%"""
+            print(test_msg)
+            max_accuracy = max(max_accuracy, test_stats["acc1"])
+            print(f"Max accuracy: {max_accuracy:.2f}%")
+            test_stats1 = {f"test_{k}": v for k, v in test_stats.items()}
+        else:
+            test_stats1 = {}
 
         log_stats = {**{f"train_{k}": v for k, v in train_stats.items()},
-                     **{f"test_{k}": v for k, v in test_stats.items()},
+                     **test_stats1,
                      "epoch": epoch,
                      "n_parameters": n_parameters}
 
         if args.output_dir and utils.is_main_process():
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
+            if epoch % test_interval == 0 or epoch == args.epochs - 1:
+                writer.add_scalar("test_acc1", test_stats["acc1"], epoch)
+                writer.add_scalar("test_acc5", test_stats["acc5"], epoch)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
@@ -801,7 +921,7 @@ def main(args: argparse.Namespace):
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser("DeiT training and evaluation script",
+    parser = argparse.ArgumentParser("DeiT training and evaluation script.",
                                      parents=[get_args_parser()])
     args = parser.parse_args()
 

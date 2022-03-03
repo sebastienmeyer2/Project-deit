@@ -1,6 +1,9 @@
 # Copyright (c) 2015-present, Facebook, Inc.
 # All rights reserved.
-"""Gather DeiT models."""
+"""Gather DeiT models.
+
+Additional changes might be taken from https://github.com/youweiliang/evit.
+"""
 
 
 from functools import partial
@@ -8,9 +11,12 @@ from functools import partial
 import torch
 from torch import nn
 
-from timm.models.vision_transformer import VisionTransformer, _cfg
+# from timm.models.vision_transformer import VisionTransformer, _cfg
 from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_
+
+
+from vision_transformer import VisionTransformer, _cfg
 
 
 __all__ = [
@@ -41,7 +47,7 @@ class DistilledVisionTransformer(VisionTransformer):
         self.head_dist.apply(self._init_weights)
 
     def forward_features(self, x):
-        # taken from https://github.com/rwightman/pytorch-image-models/blob/master/timm/models/
+        # Taken from https://github.com/rwightman/pytorch-image-models/blob/master/timm/models/
         # vision_transformer.py
         # with slight modifications to add the dist_token
         B = x.shape[0]
@@ -69,7 +75,7 @@ class DistilledVisionTransformer(VisionTransformer):
         if self.training:
             return x, x_dist
         else:
-            # during inference, return the average of both classifier predictions
+            # During inference, return the average of both classifier predictions
             return (x + x_dist) / 2
 
 
