@@ -506,6 +506,13 @@ def get_args_parser():
         metavar="N",
         help="Start epoch. Default: 0."
     )
+
+    parser.add_argument(
+        "--eval_gap",
+        default=5,
+        type=int,
+        help="Number of epochs between each evaluation during training. Default: 5."
+    )
     parser.add_argument(
         "--eval",
         action="store_true",
@@ -890,7 +897,7 @@ def main(args: argparse.Namespace):
         #     with (output_dir / "log.txt").open("a") as f:
         #         f.write(json.dumps(log_stats) + "\n")
 
-        test_interval = 30
+        test_interval = args.eval_gap
         if epoch % test_interval == 0 or epoch == args.epochs - 1:
             test_stats = evaluate(data_loader_val, model, device, keep_rate)
             test_msg = f"Accuracy of the network on the {len(dataset_val)}"

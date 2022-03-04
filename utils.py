@@ -16,6 +16,8 @@ import time
 
 from collections import defaultdict, deque
 
+import argparse
+
 import math
 
 import torch
@@ -298,3 +300,30 @@ class CosineCycle:
             self.n += 1
 
         return self.values[m]
+
+
+def str2bool(v: str) -> bool:
+    """An easy way to handle boolean options.
+
+    Parameters
+    ----------
+    v : str
+        Argument value.
+
+    Returns
+    -------
+    str2bool(v) : bool
+        Corresponding boolean value, if it exists.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        If the entry cannot be converted to a boolean.
+    """
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    if v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    raise argparse.ArgumentTypeError("Boolean value expected.")
