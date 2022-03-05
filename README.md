@@ -3,6 +3,11 @@
 - use deit for semi-supervised learning like in fixmatch project
 - token pooling (voir github 2ème lien) - compresser ~ top-k tokens dans le class token à intégrer dans DeiT 
 
+TO-DO:
+- use pre-computing for teacher training
+- train teacher
+- train w. teacher distillation / dist. + token
+- presentation
 
 ----------------------
 
