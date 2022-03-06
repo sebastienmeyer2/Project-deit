@@ -12,10 +12,14 @@ from typing import Iterable, Optional
 
 import math
 
+import numpy as np
+
 import torch
 
 from timm.data import Mixup
 from timm.utils import accuracy, ModelEma
+
+from tqdm import tqdm
 
 
 import utils
@@ -23,11 +27,38 @@ from helpers import adjust_keep_rate
 from losses import DistillationLoss
 
 
+def precompute(
+    teacher_model: torch.nn.Module, dataloader: Iterable, device: torch.device,
+    mixup_fn: Optional[Mixup] = None
+):
+
+    conv_features = []
+    targets_list = []
+
+    for samples, targets in tqdm(dataloader):
+
+        samples = samples.to(device, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
+
+        if mixup_fn is not None:
+            samples, targets = mixup_fn(samples, targets)
+
+        # RegNetY intermediate sequentials
+        x = teacher_model(samples)
+
+        conv_features.extend(x.data.cpu().numpy())
+        targets_list.extend(targets.data.cpu().numpy())
+
+    conv_features = np.concatenate([[feat] for feat in conv_features])
+
+    return (conv_features, targets_list)
+
+
 def train_one_epoch(
     model: torch.nn.Module, criterion: DistillationLoss, data_loader: Iterable,
     optimizer: torch.optim.Optimizer, device: torch.device, epoch: int, loss_scaler,
     max_norm: float = 0, model_ema: Optional[ModelEma] = None,
-    mixup_fn: Optional[Mixup] = None, set_training_mode=True
+    mixup_fn: Optional[Mixup] = None, set_training_mode=True, preconv: bool = False
 ):
 
     model.train(set_training_mode)
@@ -41,12 +72,13 @@ def train_one_epoch(
         samples = samples.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
-        if mixup_fn is not None:
+        if mixup_fn is not None and not preconv:
             samples, targets = mixup_fn(samples, targets)
 
         with torch.cuda.amp.autocast():
-            # outputs = model(samples)
+
             outputs = model(samples)
+            # print(outputs.shape, targets.shape)
             loss = criterion(samples, outputs, targets)
 
         loss_value = loss.item()
@@ -111,8 +143,9 @@ def train_one_epoch_shrink(
             samples, targets = mixup_fn(samples, targets)
 
         with torch.cuda.amp.autocast():
-            # outputs = model(samples)
+
             outputs = model(samples, keep_rate)
+            # print(outputs.shape, targets.shape)
             loss = criterion(samples, outputs, targets)
 
         loss_value = loss.item()
@@ -150,7 +183,8 @@ def train_one_epoch_shrink(
 
 
 @torch.no_grad()
-def evaluate(data_loader, model, device, keep_rate=None):
+def evaluate(data_loader, model, device):
+
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -160,13 +194,53 @@ def evaluate(data_loader, model, device, keep_rate=None):
     model.eval()
 
     for images, target in metric_logger.log_every(data_loader, 10, header):
+
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
         # Compute output
         with torch.cuda.amp.autocast():
-            # output = model(images)
+
+            output = model(images)
+            # print(output.shape, target.shape)
+            loss = criterion(output, target)
+
+        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+
+        batch_size = images.shape[0]
+        metric_logger.update(loss=loss.item())
+        metric_logger.meters["acc1"].update(acc1.item(), n=batch_size)
+        metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
+
+    # Gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+    print("* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}"
+          .format(top1=metric_logger.acc1, top5=metric_logger.acc5, losses=metric_logger.loss))
+
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+
+@torch.no_grad()
+def evaluate_shrink(data_loader, model, device, keep_rate=None):
+
+    criterion = torch.nn.CrossEntropyLoss()
+
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    header = "Test:"
+
+    # Switch to evaluation mode
+    model.eval()
+
+    for images, target in metric_logger.log_every(data_loader, 10, header):
+
+        images = images.to(device, non_blocking=True)
+        target = target.to(device, non_blocking=True)
+
+        # Compute output
+        with torch.cuda.amp.autocast():
+
             output = model(images, keep_rate)
+            # print(output.shape, target.shape)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -196,11 +270,13 @@ def get_acc(data_loader, model, device, keep_rate=None, tokens=None):
     model.eval()
 
     for images, target in metric_logger.log_every(data_loader, 10, header):
+
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
         # Compute output
         with torch.cuda.amp.autocast():
+
             output = model(images, keep_rate, tokens)
             loss = criterion(output, target)
 

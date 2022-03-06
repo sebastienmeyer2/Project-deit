@@ -1,11 +1,13 @@
-# DL-DIY potential project ideas
-- try deit on small datasets cifar-10, cifar-100
-- use deit for semi-supervised learning like in fixmatch project
-- token pooling (voir github 2ème lien) - compresser ~ top-k tokens dans le class token à intégrer dans DeiT 
+# DLDIY - Experiments on DeiT
+
+This repository is mainly forked from the base [DeiT project](https://github.com/facebookresearch/deit) as well as the 2022 extension of [token pooling](https://github.com/youweiliang/evit). What has been done:
+
+- adaptation of datasets for CIFAR10 support
+- basic transfer learnign approach for the teachers models
+- some corrections / references added
 
 TO-DO:
-- use pre-computing for teacher training
-- train teacher
+
 - train w. teacher distillation / dist. + token
 - presentation
 

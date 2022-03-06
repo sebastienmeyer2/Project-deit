@@ -34,7 +34,7 @@ from timm.utils import NativeScaler, get_state_dict, ModelEma
 
 import utils
 from datasets import build_dataset
-from engine import train_one_epoch, evaluate
+from engine import train_one_epoch, evaluate, precompute
 from losses import DistillationLoss
 from samplers import RASampler
 
@@ -368,18 +368,18 @@ def get_args_parser():
     # Dataset parameters
     parser.add_argument(
         "--data-path",
-        default="/datasets01/imagenet_full_size/061417/",
+        default="data/",
         type=str,
-        help="""Path to the dataset. Default: "/datasets01/imagenet_full_size/061417/"."""
+        help="""Path to the dataset. Default: "data/"."""
     )
     parser.add_argument(
         "--data-set",
-        default="IMNET",
+        default="CIFAR10",
         choices=["CIFAR10", "CIFAR100", "IMNET", "INAT", "INAT19"],
         type=str,
         help="""
              Name of the dataset to use: "CIFAR10", "CIFAR100", "IMNET", "INAT" or "INAT19".
-             Default: "IMNET".
+             Default: "CIFAR10".
              """
     )
     parser.add_argument(
@@ -392,8 +392,8 @@ def get_args_parser():
 
     parser.add_argument(
         "--output_dir",
-        default="",
-        help="""Path where to save, empty for no saving. Default: ""."""
+        default="results/",
+        help="""Path where to save, empty for no saving. Default: "results/"."""
     )
     parser.add_argument(
         "--device",
@@ -419,7 +419,7 @@ def get_args_parser():
     )
     parser.add_argument(
         "--num_workers",
-        default=10,
+        default=8,
         type=int
     )
     parser.add_argument(
@@ -480,19 +480,13 @@ def main(args: argparse.Namespace):
     sampler_val = torch.utils.data.SequentialSampler(dataset_val)
 
     data_loader_train = torch.utils.data.DataLoader(
-        dataset_train, sampler=sampler_train,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        pin_memory=args.pin_mem,
-        drop_last=True,
+        dataset_train, sampler=sampler_train, batch_size=args.batch_size,
+        num_workers=args.num_workers, pin_memory=args.pin_mem, drop_last=True,
     )
 
     data_loader_val = torch.utils.data.DataLoader(
-        dataset_val, sampler=sampler_val,
-        batch_size=int(1.5 * args.batch_size),
-        num_workers=args.num_workers,
-        pin_memory=args.pin_mem,
-        drop_last=False
+        dataset_val, sampler=sampler_val, batch_size=int(1.5 * args.batch_size),
+        num_workers=args.num_workers, pin_memory=args.pin_mem, drop_last=False
     )
 
     mixup_fn = None
@@ -513,30 +507,66 @@ def main(args: argparse.Namespace):
     )
 
     # Change the final layer
+    fc_in_features = teacher_model.head.fc.weight.shape[1]
     for param in teacher_model.parameters():
         param.requires_grad = False
-    fc_in_features = teacher_model.head.fc.weight.shape[1]
-    teacher_model.head.fc = nn.Linear(fc_in_features, nb_classes_after, bias=True)
+
+    teacher_model.head.fc = nn.Identity()
 
     # Put on device
     teacher_model.to(device)
+
+    # Pre-compute features
+    print("Start precomputing features")
+    dtype = torch.float
+
+    conv_feat_train, labels_train = precompute(
+        teacher_model, data_loader_train, device, mixup_fn=mixup_fn
+    )
+    dataset_feat_train = [[torch.from_numpy(f).type(dtype), torch.tensor(l).type(dtype)]
+                          for (f, l) in zip(conv_feat_train, labels_train)]
+    dataset_feat_train = [(inputs.reshape(-1), classes)
+                          for [inputs, classes] in dataset_feat_train]
+    data_loader_feat_train = torch.utils.data.DataLoader(
+        dataset_feat_train, batch_size=128, shuffle=True
+    )
+
+    conv_feat_val, labels_val = precompute(
+        teacher_model, data_loader_val, device, mixup_fn=None
+    )
+    dataset_feat_val = [[torch.from_numpy(f).type(dtype), torch.tensor(l).type(torch.long)]
+                        for (f, l) in zip(conv_feat_val, labels_val)]
+    dataset_feat_val = [(inputs.reshape(-1), classes)
+                        for [inputs, classes] in dataset_feat_val]
+    data_loader_feat_val = torch.utils.data.DataLoader(
+        dataset_feat_val, batch_size=128, shuffle=False
+    )
+
+    # Add a final classifier layer
+    teacher_model.classifier = nn.Sequential(
+        nn.Linear(fc_in_features, nb_classes_after, bias=True),
+        nn.Identity()
+    )
+
+    teacher_model = teacher_model.to(device)  # again on device
 
     model_ema = None
     if args.model_ema:
         # Important to create EMA model after cuda(), DP wrapper, and AMP but before SyncBN and DDP
         # wrapper
         model_ema = ModelEma(
-            teacher_model,
+            teacher_model.classifier,
             decay=args.model_ema_decay,
             device="cpu" if args.model_ema_force_cpu else "",
-            resume="")
+            resume=""
+        )
 
     n_parameters = sum(p.numel() for p in teacher_model.parameters() if p.requires_grad)
     print("Number of params:", n_parameters)
 
     linear_scaled_lr = args.lr * args.batch_size * utils.get_world_size() / 512.0
     args.lr = linear_scaled_lr
-    optimizer = create_optimizer(args, teacher_model)
+    optimizer = create_optimizer(args, teacher_model.classifier)
     loss_scaler = NativeScaler()
 
     lr_scheduler, _ = create_scheduler(args, optimizer)
@@ -551,20 +581,22 @@ def main(args: argparse.Namespace):
     else:
         criterion = torch.nn.CrossEntropyLoss()
 
-    criterion = DistillationLoss(criterion, teacher_model, "none", 0., 0.)
+    # criterion = DistillationLoss(criterion, teacher_model, "none", 0., 0.)
+    criterion = DistillationLoss(criterion, teacher_model.classifier, "none", 0., 0.)
 
     output_dir = Path(args.output_dir)
 
+    # Training the last layers
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
     max_accuracy = 0.0
     for epoch in range(args.start_epoch, args.epochs):
 
         train_stats = train_one_epoch(
-            teacher_model, criterion, data_loader_train,
+            teacher_model.classifier, criterion, data_loader_feat_train,
             optimizer, device, epoch, loss_scaler,
             args.clip_grad, model_ema, mixup_fn,
-            set_training_mode=True
+            set_training_mode=True, preconv=True
         )
 
         lr_scheduler.step(epoch)
@@ -584,7 +616,7 @@ def main(args: argparse.Namespace):
                     "args": args,
                 }, checkpoint_path)
 
-        test_stats = evaluate(data_loader_val, teacher_model, device)
+        test_stats = evaluate(data_loader_feat_val, teacher_model.classifier, device)
         msg = f"Accuracy of the network on the {len(dataset_val)}"
         msg += f""" test images: {test_stats["acc1"]:.1f}%"""
         print(msg)

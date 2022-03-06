@@ -33,7 +33,7 @@ from tensorboardX import SummaryWriter
 import models
 import utils
 from datasets import build_dataset
-from engine import train_one_epoch_shrink, evaluate
+from engine import train_one_epoch_shrink, evaluate_shrink
 from helpers import speed_test, get_macs
 from losses import DistillationLoss
 from samplers import RASampler
@@ -457,18 +457,18 @@ def get_args_parser():
     # Dataset parameters
     parser.add_argument(
         "--data-path",
-        default="/datasets01/imagenet_full_size/061417/",
+        default="data/",
         type=str,
-        help="""Path to the dataset. Default: "/datasets01/imagenet_full_size/061417/"."""
+        help="""Path to the dataset. Default: "data/"."""
     )
     parser.add_argument(
         "--data-set",
-        default="IMNET",
+        default="CIFAR10",
         choices=["CIFAR10", "CIFAR100", "IMNET", "INAT", "INAT19"],
         type=str,
         help="""
              Name of the dataset to use: "CIFAR10", "CIFAR100", "IMNET", "INAT" or "INAT19".
-             Default: "IMNET".
+             Default: "CIFAR10".
              """
     )
     parser.add_argument(
@@ -481,8 +481,8 @@ def get_args_parser():
 
     parser.add_argument(
         "--output_dir",
-        default="",
-        help="""Path where to save, empty for no saving. Default: ""."""
+        default="results/",
+        help="""Path where to save, empty for no saving. Default: "results/"."""
     )
     parser.add_argument(
         "--device",
@@ -526,7 +526,7 @@ def get_args_parser():
     )
     parser.add_argument(
         "--num_workers",
-        default=10,
+        default=8,
         type=int
     )
     parser.add_argument(
@@ -824,7 +824,7 @@ def main(args: argparse.Namespace):
 
     if args.eval:
 
-        test_stats = evaluate(data_loader_val, model, device)
+        test_stats = evaluate_shrink(data_loader_val, model, device)
         msg = f"Accuracy of the network on the {len(dataset_val)}"
         msg += f""" test images: {test_stats["acc1"]:.1f}%"""
         print(msg)
@@ -899,7 +899,7 @@ def main(args: argparse.Namespace):
 
         test_interval = args.eval_gap
         if epoch % test_interval == 0 or epoch == args.epochs - 1:
-            test_stats = evaluate(data_loader_val, model, device, keep_rate)
+            test_stats = evaluate_shrink(data_loader_val, model, device, keep_rate)
             test_msg = f"Accuracy of the network on the {len(dataset_val)}"
             test_msg += f""" test images: {test_stats["acc1"]:.1f}%"""
             print(test_msg)
