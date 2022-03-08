@@ -8,14 +8,16 @@ A PyTorch implement of Vision Transformers as described in:
 `How to train your ViT? Data, Augmentation, and Regularization in Vision Transformers`
     - https://arxiv.org/abs/2106.10270
 
-The official jax code is released and available at https://github.com/google-research/vision_transformer
+The official jax code is released and available at
+https://github.com/google-research/vision_transformer
 
 DeiT model defs and weights from https://github.com/facebookresearch/deit,
 paper `DeiT: Data-efficient Image Transformers` - https://arxiv.org/abs/2012.12877
 
 Acknowledgments:
 * The paper authors for releasing code and weights, thanks!
-* I fixed my class token impl based on Phil Wang's https://github.com/lucidrains/vit-pytorch ... check it out
+* I fixed my class token impl based on Phil Wang's https://github.com/lucidrains/vit-pytorch ...
+check it out
 for some einops/einsum fun
 * Simple transformer style inspired by Andrej Karpathy's https://github.com/karpathy/minGPT
 * Bert reference code checks against Huggingface Transformers and Tensorflow Bert
@@ -35,7 +37,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, IMAGENET_INCEPTION_MEAN, IMAGENET_INCEPTION_STD
+from timm.data import (
+    IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, IMAGENET_INCEPTION_MEAN,
+    IMAGENET_INCEPTION_STD
+)
 from timm.models.helpers import build_model_with_cfg, named_apply, adapt_input_conv
 from timm.models.layers import trunc_normal_, lecun_normal_, to_2tuple
 from timm.models.registry import register_model
@@ -367,10 +372,12 @@ class VisionTransformer(nn.Module):
         - https://arxiv.org/abs/2012.12877
     """
 
-    def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
-                 num_heads=12, mlp_ratio=4., qkv_bias=True, representation_size=None, distilled=False,
-                 drop_rate=0., attn_drop_rate=0., drop_path_rate=0., embed_layer=PatchEmbed, norm_layer=None,
-                 act_layer=None, weight_init='', keep_rate=(1, ), fuse_token=False):
+    def __init__(
+        self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
+        num_heads=12, mlp_ratio=4., qkv_bias=True, representation_size=None, distilled=False,
+        drop_rate=0., attn_drop_rate=0., drop_path_rate=0., embed_layer=PatchEmbed, norm_layer=None,
+        act_layer=None, weight_init='', keep_rate=(1, ), fuse_token=False
+    ):
         """
         Args:
             img_size (int, tuple): input image size
@@ -382,7 +389,8 @@ class VisionTransformer(nn.Module):
             num_heads (int): number of attention heads
             mlp_ratio (int): ratio of mlp hidden dim to embedding dim
             qkv_bias (bool): enable bias for qkv if True
-            representation_size (Optional[int]): enable and set representation layer (pre-logits) to this value if set
+            representation_size (Optional[int]): enable and set representation layer (pre-logits)
+                to this value if set
             distilled (bool): model includes a distillation token and head as in DeiT models
             drop_rate (float): dropout rate
             attn_drop_rate (float): attention dropout rate
@@ -403,7 +411,7 @@ class VisionTransformer(nn.Module):
                 self.first_shrink_idx = i
                 break
         self.num_classes = num_classes
-        self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
+        self.num_features = self.embed_dim = embed_dim  # for consistency w. other models
         self.num_tokens = 2 if distilled else 1
         norm_layer = norm_layer or partial(nn.LayerNorm, eps=1e-6)
         act_layer = act_layer or nn.GELU
@@ -420,9 +428,10 @@ class VisionTransformer(nn.Module):
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         self.blocks = nn.ModuleList([
             Block(
-                dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
-                attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer,
-                keep_rate=keep_rate[i], fuse_token=fuse_token)
+                dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias,
+                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer,
+                act_layer=act_layer, keep_rate=keep_rate[i], fuse_token=fuse_token
+            )
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
 
@@ -440,7 +449,8 @@ class VisionTransformer(nn.Module):
         self.head = nn.Linear(self.num_features, num_classes) if num_classes > 0 else nn.Identity()
         self.head_dist = None
         if distilled:
-            self.head_dist = nn.Linear(self.embed_dim, self.num_classes) if num_classes > 0 else nn.Identity()
+            self.head_dist = \
+                nn.Linear(self.embed_dim, self.num_classes) if num_classes > 0 else nn.Identity()
 
         self.init_weights(weight_init)
 
@@ -479,22 +489,28 @@ class VisionTransformer(nn.Module):
         self.num_classes = num_classes
         self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
         if self.num_tokens == 2:
-            self.head_dist = nn.Linear(self.embed_dim, self.num_classes) if num_classes > 0 else nn.Identity()
+            self.head_dist = \
+                nn.Linear(self.embed_dim, self.num_classes) if num_classes > 0 else nn.Identity()
 
     @property
     def name(self):
         return "vit_simple_topk"
 
     def forward_features(self, x, keep_rate=None, tokens=None):
+
         _, _, h, w = x.shape
+
         if not isinstance(keep_rate, (tuple, list)):
             keep_rate = (keep_rate, ) * self.depth
+
         if not isinstance(tokens, (tuple, list)):
             tokens = (tokens, ) * self.depth
+
         assert len(keep_rate) == self.depth
         assert len(tokens) == self.depth
+
         x = self.patch_embed(x)
-        cls_token = self.cls_token.expand(x.shape[0], -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        cls_token = self.cls_token.expand(x.shape[0], -1, -1)  # from Phil Wang, thanks
         if self.dist_token is None:
             x = torch.cat((cls_token, x), dim=1)
         else:
@@ -504,7 +520,9 @@ class VisionTransformer(nn.Module):
         # used for finetining a ViT on images with larger size.
         pos_embed = self.pos_embed
         if x.shape[1] != pos_embed.shape[1]:
+
             assert h == w  # for simplicity assume h == w
+
             real_pos = pos_embed[:, self.num_tokens:]
             hw = int(math.sqrt(real_pos.shape[1]))
             true_hw = int(math.sqrt(x.shape[1] - self.num_tokens))
@@ -516,32 +534,47 @@ class VisionTransformer(nn.Module):
         x = self.pos_drop(x + pos_embed)
 
         left_tokens = []
+
         for i, blk in enumerate(self.blocks):
+
             x, left_token = blk(x, keep_rate[i], tokens[i])
             left_tokens.append(left_token)
+
         x = self.norm(x)
+
         if self.dist_token is None:
             return self.pre_logits(x[:, 0]), left_tokens
         else:
-            return x[:, 0], x[:, 1]
+            return (x[:, 0], x[:, 1]), left_tokens
 
     def forward(self, x, keep_rate=None, tokens=None, speed_test=False):
+
         x, left_tokens = self.forward_features(x, keep_rate, tokens)
+
         if self.head_dist is not None:
+
+            # print("Before head", x.shape)
             x, x_dist = self.head(x[0]), self.head_dist(x[1])  # x must be a tuple
+
             if self.training and not torch.jit.is_scripting():
-                # during inference, return the average of both classifier predictions
+
+                # During inference, return the average of both classifier predictions
                 return x, x_dist
             else:
                 return (x + x_dist) / 2
         else:
+
             x = self.head(x)
+
         if speed_test:
             return x, left_tokens
+
         return x
 
 
-def _init_vit_weights(module: nn.Module, name: str = '', head_bias: float = 0., jax_impl: bool = False):
+def _init_vit_weights(
+    module: nn.Module, name: str = "", head_bias: float = 0., jax_impl: bool = False
+):
     """ ViT weight initialization
     * When called without n, head_bias, jax_impl args it will behave exactly the same
       as my original init for compatibility with prev hparam / downstream use cases (ie DeiT).
@@ -719,7 +752,8 @@ def _create_vision_transformer(variant, pretrained=False, default_cfg=None, **kw
         representation_size=repr_size,
         pretrained_filter_fn=checkpoint_filter_fn,
         pretrained_custom_load='npz' in default_cfg['url'],
-        **kwargs)
+        **kwargs
+    )
     return model
 
 

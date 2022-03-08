@@ -73,8 +73,10 @@ class DistilledVisionTransformer(VisionTransformer):
         x_dist = self.head_dist(x_dist)
 
         if self.training:
+            print(x.shape, x_dist.shape)
             return x, x_dist
         else:
+            print("Not training...")
             # During inference, return the average of both classifier predictions
             return (x + x_dist) / 2
 

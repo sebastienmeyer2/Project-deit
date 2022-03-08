@@ -78,7 +78,6 @@ def train_one_epoch(
         with torch.cuda.amp.autocast():
 
             outputs = model(samples)
-            # print(outputs.shape, targets.shape)
             loss = criterion(samples, outputs, targets)
 
         loss_value = loss.item()
@@ -140,17 +139,18 @@ def train_one_epoch_shrink(
         )
 
         if mixup_fn is not None:
+
             samples, targets = mixup_fn(samples, targets)
 
         with torch.cuda.amp.autocast():
 
             outputs = model(samples, keep_rate)
-            # print(outputs.shape, targets.shape)
             loss = criterion(samples, outputs, targets)
 
         loss_value = loss.item()
 
         if not math.isfinite(loss_value):
+
             print(f"Loss is {loss_value}, stopping training")
             sys.exit(1)
 
@@ -164,7 +164,9 @@ def train_one_epoch_shrink(
         )
 
         torch.cuda.synchronize()
+
         if model_ema is not None:
+
             model_ema.update(model)
 
         metric_logger.update(loss=loss_value)
@@ -202,7 +204,6 @@ def evaluate(data_loader, model, device):
         with torch.cuda.amp.autocast():
 
             output = model(images)
-            # print(output.shape, target.shape)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -240,7 +241,6 @@ def evaluate_shrink(data_loader, model, device, keep_rate=None):
         with torch.cuda.amp.autocast():
 
             output = model(images, keep_rate)
-            # print(output.shape, target.shape)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))

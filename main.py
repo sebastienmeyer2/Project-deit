@@ -18,6 +18,7 @@ import warnings
 import numpy as np
 
 import torch
+from torch import nn
 from torch.backends import cudnn
 
 from timm.data import Mixup
@@ -33,7 +34,7 @@ from tensorboardX import SummaryWriter
 import models
 import utils
 from datasets import build_dataset
-from engine import train_one_epoch_shrink, evaluate_shrink
+from engine import train_one_epoch_shrink, evaluate_shrink, train_one_epoch, evaluate
 from helpers import speed_test, get_macs
 from losses import DistillationLoss
 from samplers import RASampler
@@ -585,6 +586,7 @@ def main(args: argparse.Namespace):
 
     dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
     dataset_val, _ = build_dataset(is_train=False, args=args)
+    nb_classes_before = 1000  # ImageNet
 
     # if True:  # args.distributed:
 
@@ -645,18 +647,31 @@ def main(args: argparse.Namespace):
         )
 
     print(f"Creating model: {args.model}")
-    model = create_model(
-        args.model,
-        base_keep_rate=args.base_keep_rate,
-        drop_loc=eval(args.drop_loc),
-        pretrained=False,
-        num_classes=args.nb_classes,
-        drop_rate=args.drop,
-        drop_path_rate=args.drop_path,
-        drop_block_rate=None,
-        fuse_token=args.fuse_token,
-        img_size=(args.input_size, args.input_size)
-    )
+    if "shrink" in args.model:
+        model = create_model(
+            args.model,
+            base_keep_rate=args.base_keep_rate,
+            drop_loc=eval(args.drop_loc),
+            pretrained=False,
+            num_classes=args.nb_classes,
+            drop_rate=args.drop,
+            drop_path_rate=args.drop_path,
+            drop_block_rate=None,
+            fuse_token=args.fuse_token,
+            img_size=(args.input_size, args.input_size),
+            distilled=True if args.distillation_type != "none" else False
+        )
+    else:
+        model = create_model(
+            args.model,
+            pretrained=False,
+            num_classes=args.nb_classes,
+            drop_rate=args.drop,
+            drop_path_rate=args.drop_path,
+            drop_block_rate=None,
+            img_size=(args.input_size, args.input_size),
+            distilled=True if args.distillation_type != "none" else False
+        )
 
     if args.finetune:
         if args.finetune.startswith("https"):
@@ -701,7 +716,8 @@ def main(args: argparse.Namespace):
 
     # Taken from https://github.com/youweiliang/evit
     if args.test_speed and utils.is_main_process():
-        # test model throughput for three times to ensure accuracy
+
+        # Test model throughput for three times to ensure accuracy
         inference_speed = speed_test(model)
         print("inference_speed (inaccurate):", inference_speed, "images/s")
         inference_speed = speed_test(model)
@@ -765,15 +781,31 @@ def main(args: argparse.Namespace):
     teacher_model = None
     if args.distillation_type != "none":
 
+        # Create pretrained model
         assert args.teacher_path, "need to specify teacher-path when using distillation"
 
         print(f"Creating teacher model: {args.teacher_model}")
         teacher_model = create_model(
             args.teacher_model,
             pretrained=False,
-            num_classes=args.nb_classes,
+            num_classes=nb_classes_before,
             global_pool="avg",
         )
+
+        # Change the final layer
+        fc_in_features = teacher_model.head.fc.weight.shape[1]
+        for param in teacher_model.parameters():
+            param.requires_grad = False
+
+        teacher_model.head.fc = nn.Identity()
+
+        # Add a final classifier layer
+        teacher_model.classifier = nn.Sequential(
+            nn.Linear(fc_in_features, args.nb_classes, bias=True),
+            nn.Identity()
+        )
+
+        # Load pretrained weights
         if args.teacher_path.startswith("https"):
             checkpoint = torch.hub.load_state_dict_from_url(
                 args.teacher_path, map_location="cpu", check_hash=True)
@@ -839,12 +871,19 @@ def main(args: argparse.Namespace):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
 
-        train_stats, keep_rate = train_one_epoch_shrink(
-            model, criterion, data_loader_train, optimizer, device, epoch, loss_scaler,
-            args.clip_grad, model_ema, mixup_fn, writer,
-            set_training_mode=args.finetune == "",  # keep in eval mode during finetuning
-            args=args
-        )
+        if "shrink" in args.model:
+            train_stats, keep_rate = train_one_epoch_shrink(
+                model, criterion, data_loader_train, optimizer, device, epoch, loss_scaler,
+                args.clip_grad, model_ema, mixup_fn, writer,
+                set_training_mode=args.finetune == "",  # keep in eval mode during finetuning
+                args=args
+            )
+        else:
+            train_stats = train_one_epoch(
+                model, criterion, data_loader_train, optimizer, device, epoch, loss_scaler,
+                args.clip_grad, model_ema, mixup_fn,
+                set_training_mode=args.finetune == "",  # keep in eval mode during finetuning
+            )
 
         lr_scheduler.step(epoch)
         if args.output_dir:
@@ -899,7 +938,12 @@ def main(args: argparse.Namespace):
 
         test_interval = args.eval_gap
         if epoch % test_interval == 0 or epoch == args.epochs - 1:
-            test_stats = evaluate_shrink(data_loader_val, model, device, keep_rate)
+
+            if "shrink" in args.model:
+                test_stats = evaluate_shrink(data_loader_val, model, device, keep_rate)
+            else:
+                test_stats = evaluate(data_loader_val, model, device)
+
             test_msg = f"Accuracy of the network on the {len(dataset_val)}"
             test_msg += f""" test images: {test_stats["acc1"]:.1f}%"""
             print(test_msg)
